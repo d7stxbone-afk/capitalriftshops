@@ -1,0 +1,50 @@
+const assert=require('node:assert/strict');
+const Intel=require('../intel-views');
+const Region=require('../region-data');
+require('../scout-survey');
+const Scout=global.CRCCScoutSurvey;
+
+const region=Region.region({areaId:'12/946/1652',chunkId:'15/1/2',busyness:2,wealth:1.4,urbanity:0.8,buildings:10,activityArea:{businesses:3,owned:1,rooms:8,land:4},rentersBrief:{pool:5,housed:3,looking:2,listings:1}},123);
+assert.equal(region.rentersBrief.listings,1);
+const intel=Region.retail({areaId:'12/946/1652',goodsTotal:3,items:[{itemId:'a',sellersHere:0,opportunityPerMin:4,bestAsk:null},{itemId:'b',sellersHere:null,opportunityPerMin:8,wouldSellPerMin:9,bestAsk:5},{itemId:'c',sellersHere:2,opportunityPerMin:1,wouldSellPerMin:12}]});
+assert.equal(intel.items[0].bestAsk,null);
+assert.deepEqual(Region.filterItems(intel.items,{zeroSellers:true}).map(x=>x.itemId),['a']);
+assert.deepEqual(Region.filterItems(intel.items).map(x=>x.itemId),['b','a','c']);
+assert.deepEqual(Region.filterItems(intel.items,{sort:'wouldSellPerMin'}).map(x=>x.itemId),['c','b','a']);
+assert.deepEqual(Region.filterItems(intel.items,{sort:'bestAsk'}).map(x=>x.itemId),['b','a','c']);
+
+const rawDays=Array.from({length:20},(_,i)=>({day:i+1,revenue:i<6?10:i<13?20:30,units:2,items:{a:[3,99]}}));
+const h=Region.history({shopId:'a',days:rawDays});assert.deepEqual(h.days[0].items.a,[3,99]);
+const analysis=Intel.history(h);assert.equal(analysis.latest.day,20);assert.equal(analysis.recent.revenue,30);assert.equal(analysis.previous.revenue,20);assert.equal(analysis.trend,50);assert.equal(analysis.all30.days,20);
+assert.equal(Intel.history({days:[{day:2,revenue:5,units:1},{day:1,revenue:0,units:0}]}).trend,null);
+assert.equal(Intel.history({days:Array.from({length:14},(_,i)=>({day:i,revenue:0,units:0}))}).trend,0);
+
+const personal={id:'p',income:{sources:{shops:{rows:[{shopId:'a',name:'Gross 7',grossPerMin:20,costPerMin:3,wagePerMin:2,customersPerMin:5},{shopId:'b',name:'Gross 8',grossPerMin:10,costPerMin:2,wagePerMin:2,customersPerMin:null}]}}}};
+const company={id:'c',income:{sources:{shops:{rows:[{shopId:'a',name:'Gross 1',grossPerMin:999,costPerMin:1,wagePerMin:1}]}}}};
+const histories={'p:a':h,'c:a':Region.history({shopId:'a',days:[{day:1,revenue:9999,units:1}]})};
+const p=Intel.shops(personal,{},histories),c=Intel.shops(company,{},histories);
+assert.equal(p[0].history.latest.revenue,30);assert.equal(c[0].history.latest.revenue,9999);
+assert.deepEqual(Intel.sort(p,'grossPerMin').map(r=>r.id),['a','b']);
+assert.deepEqual(Intel.sort(p,'gameNetPerMin').map(r=>r.id),['a','b']);
+assert.deepEqual(Intel.sort(p,'customersPerMin').map(r=>r.id),['a','b']);
+const mapping={'shopId:a':7,'shopId:b':8};assert.deepEqual(Intel.gross([...p].reverse(),mapping).map(r=>r.grossNumber),[7,8]);
+assert.equal(Intel.gross(p,mapping)[0].recentRevenue,30);
+assert.equal(Intel.summary(p).gameNetPerMin,21);
+assert.equal(Intel.grossNumber('Gross 331'),331);
+const mixed=Intel.grossRoster([...p,{...p[0],id:'new-shop',name:'New shop',stableId:'shopId:new-shop',history:null}],mapping);
+assert.deepEqual(mixed.rows.map(r=>r.id),['a','b','new-shop']);
+assert.equal(mixed.numbered,2);assert.equal(mixed.unnumbered,1);
+assert.equal(mixed.rows[2].grossNumber,null,'an unnumbered shop remains eligible for visible history without assigning a Gross number');
+const observed=Intel.observedHistories('p',{'p:orphan':Region.history({shopId:'orphan',days:[{day:1,revenue:15,units:3}]}),'c:foreign':Region.history({shopId:'foreign',days:[]}), 'p:a':h},p);
+assert.deepEqual(observed.map(x=>x.shopId),['orphan'],'only same-account histories outside the owned roster appear in the read-only observation section');
+
+const building={entityType:'building',ref:'way/1',areaM2:5000,value:50000,busyness:2,floors:3,vacantRooms:1,owner:null,landlord:{kind:'npc',name:'NPC'},hasOpenShop:true};
+const room={entityType:'room',ref:'way/1/f0/bed',parentRef:'way/1',buildingAreaM2:5000,areaM2:400,rentPerDay:200,busyness:2,status:'vacant',floor:0,kind:'room'};
+assert.equal(Scout.ownership(building),'npc');
+assert.equal(Intel.deals([building,room],{mode:'room',maxArea:500,vacant:true,maxRent:200})[0].perM2,0.5);
+assert.equal(Intel.deals([building,room],{mode:'room',maxArea:399}).length,0);
+assert.equal(Intel.deals([building,room],{mode:'building',minArea:5000,maxValue:50000,minTraffic:2,owner:'npc',vacant:true,openShop:true})[0].perM2,10);
+assert.equal(Intel.deals([building],{mode:'building',owner:'unowned'}).length,0);
+assert.equal(Intel.deals([building],{mode:'building',maxValue:49999}).length,0);
+assert.equal(Intel.deals([room],{mode:'room',maxRent:199}).length,0);
+let active=0,peak=0;Intel.bounded(Array.from({length:40},(_,i)=>i),4,async i=>{peak=Math.max(peak,++active);await new Promise(r=>setTimeout(r,1));active--;return i;}).then(result=>{assert.equal(peak,4);assert.equal(result.length,40);console.log('PASS: v0.8 region, shops, history, deals, Gross, concurrency');}).catch(e=>{console.error(e);process.exitCode=1;});

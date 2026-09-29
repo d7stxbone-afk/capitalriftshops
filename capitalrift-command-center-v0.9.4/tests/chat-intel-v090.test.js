@@ -1,0 +1,25 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const chat=require('../chat-intel.js');
+const summary={channels:[{id:'dynamic-ann',key:'announcements',kind:'system_chat',name:'Dev Announcements'},{id:'dynamic-general',key:'general',kind:'system_chat'},{id:'dynamic-bugs',key:'bug-reports',kind:'system_forum'},{id:'dynamic-suggestions',key:'suggestions',kind:'system_forum'},{id:'secret',key:'dm',kind:'dm'},{id:'private',key:'general',kind:'dm'}]};
+const channels=chat.channels(summary);assert.deepEqual(channels.map(x=>x.key),chat.KEYS);assert(!channels.some(x=>x.id==='secret'||x.id==='private'));
+assert.equal(chat.url(channels[0]),'/social/channels/dynamic-ann/messages');
+assert.equal(chat.url(channels[2],{before:'old/id',tag:'bug',status:'open',sort:'new'}),'/social/channels/dynamic-bugs/posts?before=old%2Fid&tag=bug&status=open&sort=new');
+assert.throws(()=>chat.url({id:'secret',key:'dm',kind:'dm'}));
+const m=chat.message({id:'m1',authorName:'Dev',body:'Mahogany shop',createdAt:'2026-09-26',replyTo:{id:'m0',authorName:'A',excerpt:'hello'}},channels[0]);
+const n=chat.message({id:'m2',authorName:'Other',body:'Warehouse',createdAt:'2026-09-25'},channels[0]);
+assert.equal(chat.merge([m],[m,n]).length,2);
+assert.equal(chat.search([m,n],{text:'mahogany',author:'dev',channel:'announcements',from:'2026-09-26',hasReply:true}).length,1);
+assert.equal(chat.search([m,n],{sort:'oldest'})[0].id,'m2');
+assert.equal(chat.post({postId:'p1',title:'Fix this',preview:'Bug',votes:3,status:'open'},channels[2]).votes,3);
+(async()=>{
+  const calls=[],read=async url=>{calls.push(url);return calls.length===1?{messages:Array.from({length:50},(_,i)=>({id:'m'+(100-i),body:'hello'}))}:{messages:[{id:'m51',body:'duplicate'},{id:'m50',body:'last'}]};};
+  const scan=await chat.scan(channels[1],read,{pages:10});assert.equal(calls.length,2);assert(calls[1].includes('before=m51'));assert.equal(scan.rows.length,51);
+  const limited=[];await chat.scan(channels[1],async url=>{limited.push(url);return{messages:Array.from({length:50},(_,i)=>({id:String(limited.length)+':'+i}))};},{pages:500});assert.equal(limited.length,10);
+  const source=fs.readFileSync(require.resolve('../background.js'),'utf8');
+  const socialReadSource=source.slice(source.indexOf('async function socialRead'),source.indexOf('async function socialSummary'));
+  assert(socialReadSource.includes('fetch(API+path,'),'Public social reads must use the game API prefix');
+  assert(source.includes("kind==='socialScan'")&&source.includes("kind==='socialClear'"));
+  assert(!/social\/(?:send|read|vote|react)/.test(source.slice(source.indexOf('async function socialRead'),source.indexOf('// ---- 5-minute automatic refresh'))));
+  console.log('PASS: v0.9 dynamic public channels, DM exclusion, bounded pagination, dedupe, search, forum query and read-only routes');
+})().catch(e=>{console.error(e);process.exitCode=1;});
